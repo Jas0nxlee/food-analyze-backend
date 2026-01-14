@@ -29,3 +29,10 @@ MySQL 配置：
 - `MYSQL_DATABASE`：默认 `food_analyze`
 
 启动时会自动创建数据库与表（`users/meals/meal_items/food_items`）。
+
+图片识别（百度菜品识别）：
+
+在云托管服务的环境变量中配置：
+
+- `BAIDU_API_KEY`
+- `BAIDU_SECRET_KEY`

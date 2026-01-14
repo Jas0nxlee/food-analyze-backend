@@ -1,5 +1,8 @@
 import os
 import time
+import json
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from flask import Flask, request, jsonify
 
@@ -59,6 +62,74 @@ def ensure_seed_food_items(conn):
             "INSERT INTO food_items (id, name, calories_per_100g, created_at) VALUES (%s,%s,%s,%s),(%s,%s,%s,%s)",
             ("f_gbjd", "宫保鸡丁", 180, ts, "f_rice", "米饭", 116, ts),
         )
+
+BAIDU_TOKEN = ""
+BAIDU_TOKEN_EXPIRES_AT = 0
+
+def baidu_get_access_token():
+    global BAIDU_TOKEN, BAIDU_TOKEN_EXPIRES_AT
+    now = int(time.time())
+    if BAIDU_TOKEN and BAIDU_TOKEN_EXPIRES_AT - now > 60:
+        return BAIDU_TOKEN
+    api_key = os.environ.get("BAIDU_API_KEY") or ""
+    secret_key = os.environ.get("BAIDU_SECRET_KEY") or ""
+    if not api_key or not secret_key:
+        raise RuntimeError("missing_baidu_credentials")
+    qs = urllib.parse.urlencode(
+        {"grant_type": "client_credentials", "client_id": api_key, "client_secret": secret_key}
+    )
+    url = f"https://aip.baidubce.com/oauth/2.0/token?{qs}"
+    req = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        raw = resp.read().decode("utf-8")
+    data = json.loads(raw)
+    token = data.get("access_token") or ""
+    expires_in = int(data.get("expires_in") or 0)
+    if not token:
+        raise RuntimeError(data.get("error_description") or data.get("error") or "baidu_token_failed")
+    BAIDU_TOKEN = token
+    BAIDU_TOKEN_EXPIRES_AT = now + max(expires_in, 0)
+    return BAIDU_TOKEN
+
+def baidu_dish_recognize_by_url(image_url: str, top_num: int = 5):
+    token = baidu_get_access_token()
+    url = f"https://aip.baidubce.com/rest/2.0/image-classify/v2/dish?access_token={urllib.parse.quote(token)}"
+    body = urllib.parse.urlencode({"url": image_url, "top_num": str(top_num)}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    with urllib.request.urlopen(req, timeout=12) as resp:
+        raw = resp.read().decode("utf-8")
+    data = json.loads(raw)
+    if data.get("error_code"):
+        raise RuntimeError(f"baidu_error:{data.get('error_code')}:{data.get('error_msg')}")
+    return data
+
+def map_food_items_by_name(conn, names):
+    if not names:
+        return {}
+    uniq = []
+    seen = set()
+    for n in names:
+        s = str(n or "").strip()
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        uniq.append(s)
+    if not uniq:
+        return {}
+    placeholders = ",".join(["%s"] * len(uniq))
+    sql = f"SELECT id, name, calories_per_100g FROM food_items WHERE name IN ({placeholders})"
+    with conn.cursor() as cur:
+        cur.execute(sql, tuple(uniq))
+        rows = cur.fetchall()
+    out = {}
+    for r in rows:
+        out[r["name"]] = {"foodItemId": r["id"], "calorieHint": int(r.get("calories_per_100g") or 0)}
+    return out
 
 @app.route("/api/health", methods=["GET"])
 def health():
@@ -182,10 +253,42 @@ def delete_meal(meal_id):
 def recognize():
     data = request.get_json(force=True) or {}
     recognize_id = f"rec_{now_ts()}"
-    items = [
-        {"name": "宫保鸡丁", "confidence": 0.86, "foodItemId": "f_gbjd", "calorieHint": 180},
-        {"name": "米饭", "confidence": 0.74, "foodItemId": "f_rice", "calorieHint": 116},
-    ]
+    image_url = (data.get("imageUrl") or data.get("imageFileId") or "").strip()
+    if not image_url:
+        return jsonify({"error": "bad_request", "message": "missing imageUrl"}), 400
+    if image_url.startswith("cloud://"):
+        return jsonify({"error": "bad_request", "message": "imageUrl must be http(s) URL"}), 400
+    try:
+        r = baidu_dish_recognize_by_url(image_url, top_num=5)
+    except Exception as e:
+        msg = str(e) or "recognize_failed"
+        return jsonify({"error": "recognize_failed", "message": msg}), 502
+    results = r.get("result") or []
+    items = []
+    names = []
+    for x in results:
+        name = str(x.get("name") or "").strip()
+        prob = x.get("probability")
+        try:
+            conf = float(prob)
+        except Exception:
+            conf = 0.0
+        if not name:
+            continue
+        names.append(name)
+        items.append({"name": name, "confidence": conf, "foodItemId": "", "calorieHint": 0})
+    if ensure_db_ready():
+        conn = connect()
+        try:
+            ensure_seed_food_items(conn)
+            mapping = map_food_items_by_name(conn, names)
+        finally:
+            conn.close()
+        for it in items:
+            m = mapping.get(it["name"])
+            if m:
+                it["foodItemId"] = m["foodItemId"]
+                it["calorieHint"] = m["calorieHint"]
     return jsonify({"recognizeId": recognize_id, "items": items})
 
 @app.route("/api/meals", methods=["POST"])
