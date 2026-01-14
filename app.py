@@ -7,7 +7,9 @@ from db import connect, init_schema
 
 app = Flask(__name__)
 
-init_schema()
+DB_READY = False
+DB_INIT_ERROR = ""
+DB_INIT_AT = 0
 
 def now_ts():
     return int(time.time() * 1000)
@@ -15,6 +17,22 @@ def now_ts():
 def today_str():
     dt = datetime.now(timezone.utc).astimezone()
     return dt.strftime("%Y-%m-%d")
+
+def ensure_db_ready():
+    global DB_READY, DB_INIT_ERROR, DB_INIT_AT
+    if DB_READY:
+        return True
+    try:
+        init_schema()
+        DB_READY = True
+        DB_INIT_ERROR = ""
+        DB_INIT_AT = now_ts()
+        return True
+    except Exception as e:
+        DB_READY = False
+        DB_INIT_ERROR = f"{type(e).__name__}: {str(e)}"
+        DB_INIT_AT = now_ts()
+        return False
 
 def get_openid():
     for k in ["X-WX-OPENID", "x-wx-openid", "X-WX-From-Openid", "x-wx-from-openid", "x-wx-openid"]:
@@ -44,11 +62,14 @@ def ensure_seed_food_items(conn):
 
 @app.route("/api/health", methods=["GET"])
 def health():
-    return jsonify({"ok": True, "ts": now_ts()})
+    ok = ensure_db_ready()
+    return jsonify({"ok": ok, "ts": now_ts(), "dbReady": ok, "dbError": DB_INIT_ERROR, "dbInitAt": DB_INIT_AT})
 
 @app.route("/api/todaySummary", methods=["GET"])
 def today_summary():
     openid = get_openid()
+    if not ensure_db_ready():
+        return jsonify({"error": "db_unavailable", "message": DB_INIT_ERROR}), 503
     d0 = today_str()
     start = int(datetime.strptime(d0, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp() * 1000)
     end = start + 24 * 60 * 60 * 1000
@@ -72,6 +93,8 @@ def today_summary():
 @app.route("/api/meals", methods=["GET"])
 def list_meals():
     openid = get_openid()
+    if not ensure_db_ready():
+        return jsonify({"error": "db_unavailable", "message": DB_INIT_ERROR}), 503
     date = request.args.get("date", today_str())
     start = int(datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp() * 1000)
     end = start + 24 * 60 * 60 * 1000
@@ -101,6 +124,8 @@ def list_meals():
 @app.route("/api/meals/<meal_id>", methods=["GET"])
 def get_meal(meal_id):
     openid = get_openid()
+    if not ensure_db_ready():
+        return jsonify({"error": "db_unavailable", "message": DB_INIT_ERROR}), 503
     conn = connect()
     try:
         with conn.cursor() as cur:
@@ -142,6 +167,8 @@ def get_meal(meal_id):
 @app.route("/api/meals/<meal_id>", methods=["DELETE"])
 def delete_meal(meal_id):
     openid = get_openid()
+    if not ensure_db_ready():
+        return jsonify({"error": "db_unavailable", "message": DB_INIT_ERROR}), 503
     conn = connect()
     try:
         with conn.cursor() as cur:
@@ -172,6 +199,8 @@ def create_meal():
     recognize_id = data.get("recognizeId", "")
     meal_id = f"m_{now_ts()}"
     created_at = now_ts()
+    if not ensure_db_ready():
+        return jsonify({"error": "db_unavailable", "message": DB_INIT_ERROR}), 503
     conn = connect()
     try:
         ensure_seed_food_items(conn)
@@ -204,6 +233,8 @@ def create_meal():
 def report_month():
     openid = get_openid()
     month = request.args.get("month") or datetime.now(timezone.utc).astimezone().strftime("%Y-%m")
+    if not ensure_db_ready():
+        return jsonify({"error": "db_unavailable", "message": DB_INIT_ERROR}), 503
     conn = connect()
     try:
         with conn.cursor() as cur:

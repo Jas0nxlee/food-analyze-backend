@@ -20,7 +20,12 @@ def get_db_config():
     host = os.environ.get("MYSQL_HOST") or os.environ.get("DB_HOST") or ""
     port = os.environ.get("MYSQL_PORT") or os.environ.get("DB_PORT") or ""
     user = os.environ.get("MYSQL_USER") or os.environ.get("MYSQL_USERNAME") or os.environ.get("DB_USER") or os.environ.get("DB_USERNAME") or "root"
-    password = os.environ.get("MYSQL_PASSWORD") or os.environ.get("DB_PASSWORD") or ""
+    password = (
+        os.environ.get("MYSQL_PASSWORD")
+        or os.environ.get("MYSQL_ROOT_PASSWORD")
+        or os.environ.get("DB_PASSWORD")
+        or ""
+    )
     database = os.environ.get("MYSQL_DATABASE") or os.environ.get("DB_NAME") or os.environ.get("DB_DATABASE") or "food_analyze"
 
     if address and not host:
@@ -51,6 +56,7 @@ def connect():
         charset=cfg["charset"],
         cursorclass=pymysql.cursors.DictCursor,
         autocommit=True,
+        connect_timeout=5,
     )
 
 
@@ -64,6 +70,7 @@ def init_schema():
         charset=cfg["charset"],
         cursorclass=pymysql.cursors.DictCursor,
         autocommit=True,
+        connect_timeout=5,
     )
     try:
         with conn.cursor() as cur:
@@ -123,4 +130,3 @@ def init_schema():
             )
     finally:
         conn.close()
-
