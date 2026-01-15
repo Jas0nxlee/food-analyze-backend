@@ -394,13 +394,22 @@ def create_meal():
             for it in confirmed_items:
                 fid = it.get("foodItemId") or ""
                 pl = it.get("portionLevel") or "medium"
+                name_client = it.get("name") or "未知食物"
                 cur.execute("SELECT name, calories_per_100g FROM food_items WHERE id=%s", (fid,))
                 fr = cur.fetchone()
-                name = fr["name"] if fr else fid
+                name = fr["name"] if fr else name_client
                 base = int(fr["calories_per_100g"]) if fr else 0
-                cal = int(round(base * portion_factor(pl)))
+                if base > 0:
+                    cal = int(round(base * portion_factor(pl)))
+                else:
+                    if pl == "small":
+                        cal = 100
+                    elif pl == "large":
+                        cal = 250
+                    else:
+                        cal = 180
                 total_cal += cal
-                item_id = f"mi_{meal_id}_{fid}"
+                item_id = f"mi_{meal_id}_{fid}_{now_ts()}" # unique id
                 cur.execute(
                     "INSERT INTO meal_items (id, meal_id, openid, food_item_id, display_name, portion_level, calories, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
                     (item_id, meal_id, openid, fid, name, pl, cal, created_at),
