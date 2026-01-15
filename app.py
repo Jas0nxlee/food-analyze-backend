@@ -108,6 +108,23 @@ def baidu_dish_recognize_by_url(image_url: str, top_num: int = 5):
         raise RuntimeError(f"baidu_error:{data.get('error_code')}:{data.get('error_msg')}")
     return data
 
+def baidu_dish_recognize_by_base64(image_base64: str, top_num: int = 5):
+    token = baidu_get_access_token()
+    url = f"https://aip.baidubce.com/rest/2.0/image-classify/v2/dish?access_token={urllib.parse.quote(token)}"
+    body = urllib.parse.urlencode({"image": image_base64, "top_num": str(top_num)}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    with urllib.request.urlopen(req, timeout=12) as resp:
+        raw = resp.read().decode("utf-8")
+    data = json.loads(raw)
+    if data.get("error_code"):
+        raise RuntimeError(f"baidu_error:{data.get('error_code')}:{data.get('error_msg')}")
+    return data
+
 def map_food_items_by_name(conn, names):
     if not names:
         return {}
@@ -251,17 +268,42 @@ def delete_meal(meal_id):
 
 @app.route("/api/recognize", methods=["POST"])
 def recognize():
+    started = now_ts()
     data = request.get_json(force=True) or {}
     recognize_id = f"rec_{now_ts()}"
+    image_base64 = (data.get("imageBase64") or "").strip()
     image_url = (data.get("imageUrl") or data.get("imageFileId") or "").strip()
-    if not image_url:
-        return jsonify({"error": "bad_request", "message": "missing imageUrl"}), 400
+    if not image_base64 and not image_url:
+        return jsonify({"error": "bad_request", "message": "missing imageBase64 or imageUrl"}), 400
     if image_url.startswith("cloud://"):
         return jsonify({"error": "bad_request", "message": "imageUrl must be http(s) URL"}), 400
     try:
-        r = baidu_dish_recognize_by_url(image_url, top_num=5)
+        image_host = urllib.parse.urlparse(image_url).netloc
+    except Exception:
+        image_host = ""
+    try:
+        if image_base64:
+            r = baidu_dish_recognize_by_base64(image_base64, top_num=5)
+            mode = "base64"
+        else:
+            r = baidu_dish_recognize_by_url(image_url, top_num=5)
+            mode = "url"
     except Exception as e:
         msg = str(e) or "recognize_failed"
+        if "baidu_error:6" in msg and not image_base64:
+            return (
+                jsonify(
+                    {
+                        "error": "bad_request",
+                        "message": "imageUrl 不可被百度访问，改用 imageBase64 传图",
+                        "provider": "baidu",
+                        "mode": "url",
+                        "imageHost": image_host,
+                        "costMs": max(now_ts() - started, 0),
+                    }
+                ),
+                400,
+            )
         return jsonify({"error": "recognize_failed", "message": msg}), 502
     results = r.get("result") or []
     items = []
@@ -289,7 +331,16 @@ def recognize():
             if m:
                 it["foodItemId"] = m["foodItemId"]
                 it["calorieHint"] = m["calorieHint"]
-    return jsonify({"recognizeId": recognize_id, "items": items})
+    return jsonify(
+        {
+            "recognizeId": recognize_id,
+            "items": items,
+            "provider": "baidu",
+            "mode": mode,
+            "imageHost": image_host,
+            "costMs": max(now_ts() - started, 0),
+        }
+    )
 
 @app.route("/api/meals", methods=["POST"])
 def create_meal():
