@@ -1,6 +1,7 @@
 import os
 import time
 import json
+import base64
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -124,6 +125,18 @@ def baidu_dish_recognize_by_base64(image_base64: str, top_num: int = 5):
     if data.get("error_code"):
         raise RuntimeError(f"baidu_error:{data.get('error_code')}:{data.get('error_msg')}")
     return data
+
+def fetch_image_as_base64(image_url: str):
+    req = urllib.request.Request(
+        image_url,
+        method="GET",
+        headers={
+            "User-Agent": "Mozilla/5.0",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=12) as resp:
+        raw = resp.read()
+    return base64.b64encode(raw).decode("utf-8")
 
 def map_food_items_by_name(conn, names):
     if not names:
@@ -287,24 +300,11 @@ def recognize():
             r = baidu_dish_recognize_by_base64(image_base64, top_num=5)
             mode = "base64"
         else:
-            r = baidu_dish_recognize_by_url(image_url, top_num=5)
-            mode = "url"
+            image_base64_fetched = fetch_image_as_base64(image_url)
+            r = baidu_dish_recognize_by_base64(image_base64_fetched, top_num=5)
+            mode = "url_fetch"
     except Exception as e:
         msg = str(e) or "recognize_failed"
-        if "baidu_error:6" in msg and not image_base64:
-            return (
-                jsonify(
-                    {
-                        "error": "bad_request",
-                        "message": "imageUrl 不可被百度访问，改用 imageBase64 传图",
-                        "provider": "baidu",
-                        "mode": "url",
-                        "imageHost": image_host,
-                        "costMs": max(now_ts() - started, 0),
-                    }
-                ),
-                400,
-            )
         return jsonify({"error": "recognize_failed", "message": msg}), 502
     results = r.get("result") or []
     items = []
