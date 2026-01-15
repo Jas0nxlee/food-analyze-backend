@@ -261,8 +261,6 @@ def get_meal(meal_id):
     if not ensure_db_ready():
         return jsonify({"error": "db_unavailable", "message": DB_INIT_ERROR}), 503
     
-    print(f"create_meal payload: {data}") # Debug log
-
     conn = connect()
     try:
         with conn.cursor() as cur:
