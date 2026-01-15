@@ -136,6 +136,31 @@ def fetch_image_as_base64(image_url: str):
     )
     with urllib.request.urlopen(req, timeout=12) as resp:
         raw = resp.read()
+
+    # Compress image to avoid Baidu API payload limits (4MB)
+    try:
+        img = Image.open(io.BytesIO(raw))
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        
+        max_dim = 1024
+        w, h = img.size
+        if w > max_dim or h > max_dim:
+            if w > h:
+                new_w = max_dim
+                new_h = int(h * (max_dim / w))
+            else:
+                new_h = max_dim
+                new_w = int(w * (max_dim / h))
+            img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=80)
+        raw = buf.getvalue()
+    except Exception as e:
+        print(f"Image compression warning: {e}")
+        # Fallback to original raw data if compression fails
+
     return base64.b64encode(raw).decode("utf-8")
 
 def map_food_items_by_name(conn, names):
@@ -421,6 +446,107 @@ def report_month():
         if not advice:
             advice = ["继续保持记录习惯", "三餐规律，控制加餐"]
         return jsonify({"summary": {"avgCalories": avg, "daysLogged": days_logged, "daysOverTarget": days_over}, "advice": {"bullets": advice}})
+    finally:
+        conn.close()
+
+@app.route("/api/user/profile", methods=["GET"])
+def get_user_profile():
+    openid = get_openid()
+    if not ensure_db_ready():
+        return jsonify({"error": "db_unavailable", "message": DB_INIT_ERROR}), 503
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT daily_target, taste_preference, gender, age, height, weight, activity_level FROM users WHERE openid=%s",
+                (openid,),
+            )
+            row = cur.fetchone()
+            if not row:
+                # Create default user if not exists
+                ts = now_ts()
+                cur.execute(
+                    "INSERT INTO users (openid, daily_target, taste_preference, created_at, updated_at) VALUES (%s, %s, %s, %s, %s)",
+                    (openid, 1800, "normal", ts, ts),
+                )
+                row = {
+                    "daily_target": 1800,
+                    "taste_preference": "normal",
+                    "gender": None,
+                    "age": None,
+                    "height": None,
+                    "weight": None,
+                    "activity_level": 1.2,
+                }
+        
+        return jsonify({
+            "dailyTarget": int(row.get("daily_target") or 1800),
+            "tastePreference": row.get("taste_preference") or "normal",
+            "gender": row.get("gender"),
+            "age": row.get("age"),
+            "height": row.get("height"),
+            "weight": row.get("weight"),
+            "activityLevel": row.get("activity_level") or 1.2,
+            "isProfileCompleted": bool(row.get("height") and row.get("weight") and row.get("age") and row.get("gender"))
+        })
+    finally:
+        conn.close()
+
+@app.route("/api/user/profile", methods=["POST"])
+def update_user_profile():
+    openid = get_openid()
+    data = request.get_json(force=True) or {}
+    
+    if not ensure_db_ready():
+        return jsonify({"error": "db_unavailable", "message": DB_INIT_ERROR}), 503
+
+    gender = data.get("gender") # 'male' or 'female'
+    try:
+        age = int(data.get("age"))
+        height = float(data.get("height"))
+        weight = float(data.get("weight"))
+        activity_level = float(data.get("activityLevel") or 1.2)
+    except (TypeError, ValueError):
+        return jsonify({"error": "bad_request", "message": "Invalid numeric values for age, height, or weight"}), 400
+
+    # Calculate BMR (Mifflin-St Jeor Equation)
+    # Men: 10W + 6.25H - 5A + 5
+    # Women: 10W + 6.25H - 5A - 161
+    bmr = 10 * weight + 6.25 * height - 5 * age
+    if gender == "male":
+        bmr += 5
+    else:
+        bmr -= 161
+    
+    daily_target = int(bmr * activity_level)
+    
+    # Update DB
+    ts = now_ts()
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            # Check if user exists
+            cur.execute("SELECT 1 FROM users WHERE openid=%s", (openid,))
+            if not cur.fetchone():
+                 cur.execute(
+                    "INSERT INTO users (openid, daily_target, taste_preference, gender, age, height, weight, activity_level, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (openid, daily_target, "normal", gender, age, height, weight, activity_level, ts, ts),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE users 
+                    SET daily_target=%s, gender=%s, age=%s, height=%s, weight=%s, activity_level=%s, updated_at=%s 
+                    WHERE openid=%s
+                    """,
+                    (daily_target, gender, age, height, weight, activity_level, ts, openid)
+                )
+        
+        return jsonify({
+            "ok": True,
+            "dailyTarget": daily_target,
+            "bmr": int(bmr)
+        })
     finally:
         conn.close()
 

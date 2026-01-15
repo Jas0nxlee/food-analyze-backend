@@ -82,11 +82,26 @@ def init_schema():
                   openid VARCHAR(64) PRIMARY KEY,
                   daily_target INT NOT NULL DEFAULT 1800,
                   taste_preference VARCHAR(16) NOT NULL DEFAULT 'normal',
+                  gender VARCHAR(8) DEFAULT NULL,
+                  age INT DEFAULT NULL,
+                  height FLOAT DEFAULT NULL,
+                  weight FLOAT DEFAULT NULL,
+                  activity_level FLOAT DEFAULT 1.2,
                   created_at BIGINT NOT NULL,
                   updated_at BIGINT NOT NULL
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
                 """
             )
+            
+            # Simple migration for existing table
+            try:
+                cur.execute("SELECT gender FROM users LIMIT 1")
+            except Exception:
+                cur.execute("ALTER TABLE users ADD COLUMN gender VARCHAR(8) DEFAULT NULL")
+                cur.execute("ALTER TABLE users ADD COLUMN age INT DEFAULT NULL")
+                cur.execute("ALTER TABLE users ADD COLUMN height FLOAT DEFAULT NULL")
+                cur.execute("ALTER TABLE users ADD COLUMN weight FLOAT DEFAULT NULL")
+                cur.execute("ALTER TABLE users ADD COLUMN activity_level FLOAT DEFAULT 1.2")
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS meals (
