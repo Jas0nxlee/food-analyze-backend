@@ -417,10 +417,12 @@ def create_meal():
                 fid = it.get("foodItemId") or ""
                 pl = it.get("portionLevel") or "medium"
                 name_client = (it.get("name") or "").strip() or "未知食物"
+                cal_hint = int(it.get("calorieHint") or 0)
+                
                 cur.execute("SELECT name, calories_per_100g FROM food_items WHERE id=%s", (fid,))
                 fr = cur.fetchone()
                 name = fr["name"] if fr else name_client
-                base = int(fr["calories_per_100g"]) if fr else 0
+                base = int(fr["calories_per_100g"]) if fr else cal_hint
                 
                 # Special handling for non-dish items
                 if "非菜" in name:
