@@ -271,6 +271,7 @@ def recognize():
     started = now_ts()
     data = request.get_json(force=True) or {}
     recognize_id = f"rec_{now_ts()}"
+    debug_requested = bool(data.get("debug"))
     image_base64 = (data.get("imageBase64") or "").strip()
     image_url = (data.get("imageUrl") or data.get("imageFileId") or "").strip()
     if not image_base64 and not image_url:
@@ -339,6 +340,7 @@ def recognize():
             "mode": mode,
             "imageHost": image_host,
             "costMs": max(now_ts() - started, 0),
+            "baiduRaw": r if debug_requested else None,
         }
     )
 
