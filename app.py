@@ -348,6 +348,14 @@ def recognize():
     for x in results:
         name = str(x.get("name") or "").strip()
         prob = x.get("probability")
+        
+        # Try to extract calorie from Baidu result
+        # Baidu returns 'calorie' as string (e.g. "120") or number, per 100g
+        try:
+            cal_val = float(x.get("calorie") or 0)
+        except Exception:
+            cal_val = 0.0
+            
         try:
             conf = float(prob)
         except Exception:
@@ -355,7 +363,7 @@ def recognize():
         if not name:
             continue
         names.append(name)
-        items.append({"name": name, "confidence": conf, "foodItemId": "", "calorieHint": 0})
+        items.append({"name": name, "confidence": conf, "foodItemId": "", "calorieHint": int(cal_val)})
     if ensure_db_ready():
         conn = connect()
         try:
@@ -367,7 +375,10 @@ def recognize():
             m = mapping.get(it["name"])
             if m:
                 it["foodItemId"] = m["foodItemId"]
-                it["calorieHint"] = m["calorieHint"]
+                # Only overwrite if DB has a non-zero value, or maybe trust DB always?
+                # Let's trust DB if it has value, otherwise keep Baidu's
+                if m["calorieHint"] > 0:
+                    it["calorieHint"] = m["calorieHint"]
     return jsonify(
         {
             "recognizeId": recognize_id,
