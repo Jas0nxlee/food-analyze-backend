@@ -232,6 +232,13 @@ def list_meals():
                 (openid, start, end),
             )
             rows = cur.fetchall()
+            
+            # Fetch food names for each meal
+            for r in rows:
+                cur.execute("SELECT display_name FROM meal_items WHERE meal_id=%s ORDER BY created_at ASC", (r["id"],))
+                item_rows = cur.fetchall()
+                r["food_names"] = [x["display_name"] for x in item_rows]
+
         items = [
             {
                 "_id": r["id"],
@@ -240,6 +247,7 @@ def list_meals():
                 "recognizeId": r.get("recognize_id") or "",
                 "tasteLevel": r.get("taste_level") or "normal",
                 "totals": {"calories": int(r.get("total_calories") or 0)},
+                "names": r.get("food_names") or []
             }
             for r in rows
         ]
@@ -252,6 +260,9 @@ def get_meal(meal_id):
     openid = get_openid()
     if not ensure_db_ready():
         return jsonify({"error": "db_unavailable", "message": DB_INIT_ERROR}), 503
+    
+    print(f"create_meal payload: {data}") # Debug log
+
     conn = connect()
     try:
         with conn.cursor() as cur:
@@ -394,12 +405,16 @@ def create_meal():
             for it in confirmed_items:
                 fid = it.get("foodItemId") or ""
                 pl = it.get("portionLevel") or "medium"
-                name_client = it.get("name") or "未知食物"
+                name_client = (it.get("name") or "").strip() or "未知食物"
                 cur.execute("SELECT name, calories_per_100g FROM food_items WHERE id=%s", (fid,))
                 fr = cur.fetchone()
                 name = fr["name"] if fr else name_client
                 base = int(fr["calories_per_100g"]) if fr else 0
-                if base > 0:
+                
+                # Special handling for non-dish items
+                if "非菜" in name:
+                    cal = 0
+                elif base > 0:
                     cal = int(round(base * portion_factor(pl)))
                 else:
                     if pl == "small":
