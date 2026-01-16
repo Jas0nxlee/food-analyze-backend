@@ -4,12 +4,14 @@ import json
 import base64
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify
 
 from db import connect, init_schema
 
 app = Flask(__name__)
+
+CN_TZ = timezone(timedelta(hours=8))
 
 DB_READY = False
 DB_INIT_ERROR = ""
@@ -19,7 +21,7 @@ def now_ts():
     return int(time.time() * 1000)
 
 def today_str():
-    dt = datetime.now(timezone.utc).astimezone()
+    dt = datetime.now(CN_TZ)
     return dt.strftime("%Y-%m-%d")
 
 def ensure_db_ready():
@@ -197,7 +199,7 @@ def today_summary():
     if not ensure_db_ready():
         return jsonify({"error": "db_unavailable", "message": DB_INIT_ERROR}), 503
     d0 = today_str()
-    start = int(datetime.strptime(d0, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp() * 1000)
+    start = int(datetime.strptime(d0, "%Y-%m-%d").replace(tzinfo=CN_TZ).timestamp() * 1000)
     end = start + 24 * 60 * 60 * 1000
     conn = connect()
     try:
@@ -222,7 +224,7 @@ def list_meals():
     if not ensure_db_ready():
         return jsonify({"error": "db_unavailable", "message": DB_INIT_ERROR}), 503
     date = request.args.get("date", today_str())
-    start = int(datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp() * 1000)
+    start = int(datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=CN_TZ).timestamp() * 1000)
     end = start + 24 * 60 * 60 * 1000
     conn = connect()
     try:
