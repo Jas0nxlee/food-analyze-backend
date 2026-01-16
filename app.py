@@ -5,6 +5,7 @@ import base64
 import urllib.parse
 import urllib.request
 import requests
+import threading
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify
 
@@ -519,6 +520,42 @@ def report_month():
     finally:
         conn.close()
 
+def run_async_analysis(openid, month, prompt):
+    try:
+        print(f"Async analysis started for {openid} - {month}")
+        ai_analysis = call_volcengine_ai(prompt)
+        
+        # Save to cache
+        ts = now_ts()
+        conn = connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO monthly_reports (openid, month, content, created_at)
+                    VALUES (%s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE content=%s, created_at=%s
+                    """,
+                    (openid, month, ai_analysis, ts, ai_analysis, ts)
+                )
+            print(f"Async analysis completed for {openid} - {month}")
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"Async analysis failed: {e}")
+        # Optionally write error to DB so frontend stops polling
+        try:
+            conn = connect()
+            with conn.cursor() as cur:
+                err_msg = f"分析失败: {str(e)}"
+                cur.execute(
+                    "UPDATE monthly_reports SET content=%s WHERE openid=%s AND month=%s",
+                    (err_msg, openid, month)
+                )
+            conn.close()
+        except:
+            pass
+
 @app.route("/api/reports/month/analyze", methods=["POST"])
 def report_month_analyze():
     openid = get_openid()
@@ -557,7 +594,7 @@ def report_month_analyze():
                     if mid not in meal_items_map: meal_items_map[mid] = []
                     meal_items_map[mid].append(it["display_name"])
 
-        # AI Analysis
+        # AI Analysis Prompt Construction
         report_text = f"用户每日目标热量：{target} kcal\n本月饮食记录：\n"
         for m in meals:
             dt = datetime.fromtimestamp(m["occurred_at"]/1000, CN_TZ).strftime("%Y-%m-%d %H:%M")
@@ -573,9 +610,8 @@ def report_month_analyze():
         3. 给出具体的饮食建议及注意事项。
         请直接返回分析结果，使用Markdown格式。
         """
-        ai_analysis = call_volcengine_ai(prompt)
         
-        # Save to cache
+        # Set status to ANALYZING
         ts = now_ts()
         with conn.cursor() as cur:
             cur.execute(
@@ -584,10 +620,14 @@ def report_month_analyze():
                 VALUES (%s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE content=%s, created_at=%s
                 """,
-                (openid, month, ai_analysis, ts, ai_analysis, ts)
+                (openid, month, "__ANALYZING__", ts, "__ANALYZING__", ts)
             )
             
-        return jsonify({"aiAnalysis": ai_analysis, "hasAnalysis": True})
+        # Start background thread
+        thread = threading.Thread(target=run_async_analysis, args=(openid, month, prompt))
+        thread.start()
+        
+        return jsonify({"aiAnalysis": "__ANALYZING__", "hasAnalysis": True})
     finally:
         conn.close()
 
