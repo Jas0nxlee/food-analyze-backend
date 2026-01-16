@@ -36,3 +36,10 @@ MySQL 配置：
 
 - `BAIDU_API_KEY`
 - `BAIDU_SECRET_KEY`
+
+AI 分析（火山引擎）：
+
+在云托管服务的环境变量中配置：
+
+- `VOLC_API_KEY`：火山引擎 API Key
+- `VOLC_MODEL`：模型 Endpoint ID（例如 `ep-20250116...`）

@@ -188,6 +188,34 @@ def map_food_items_by_name(conn, names):
         out[r["name"]] = {"foodItemId": r["id"], "calorieHint": int(r.get("calories_per_100g") or 0)}
     return out
 
+def call_volcengine_ai(prompt: str):
+    api_key = os.environ.get("VOLC_API_KEY")
+    model = os.environ.get("VOLC_MODEL")
+    if not api_key or not model:
+        return "AI未配置（请检查VOLC_API_KEY和VOLC_MODEL环境变量）"
+    
+    url = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "你是专业的营养师。请根据用户的月度饮食记录进行分析。"},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.7
+    }
+    
+    try:
+        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data.get("choices", [{}])[0].get("message", {}).get("content", "AI分析无返回")
+    except Exception as e:
+        return f"AI调用失败: {str(e)}"
+
 @app.route("/api/health", methods=["GET"])
 def health():
     ok = ensure_db_ready()
@@ -223,16 +251,27 @@ def list_meals():
     openid = get_openid()
     if not ensure_db_ready():
         return jsonify({"error": "db_unavailable", "message": DB_INIT_ERROR}), 503
-    date = request.args.get("date", today_str())
-    start = int(datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=CN_TZ).timestamp() * 1000)
-    end = start + 24 * 60 * 60 * 1000
+    
+    date_param = request.args.get("date")
+    page = int(request.args.get("page", 1))
+    page_size = int(request.args.get("pageSize", 20))
+    offset = (page - 1) * page_size
+    
     conn = connect()
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, occurred_at, image_file_id, recognize_id, taste_level, total_calories FROM meals WHERE openid=%s AND occurred_at>= %s AND occurred_at < %s ORDER BY occurred_at DESC",
-                (openid, start, end),
-            )
+            if date_param:
+                start = int(datetime.strptime(date_param, "%Y-%m-%d").replace(tzinfo=CN_TZ).timestamp() * 1000)
+                end = start + 24 * 60 * 60 * 1000
+                cur.execute(
+                    "SELECT id, occurred_at, image_file_id, recognize_id, taste_level, total_calories FROM meals WHERE openid=%s AND occurred_at>= %s AND occurred_at < %s ORDER BY occurred_at DESC",
+                    (openid, start, end),
+                )
+            else:
+                cur.execute(
+                    "SELECT id, occurred_at, image_file_id, recognize_id, taste_level, total_calories FROM meals WHERE openid=%s ORDER BY occurred_at DESC LIMIT %s OFFSET %s",
+                    (openid, page_size, offset),
+                )
             rows = cur.fetchall()
             
             # Fetch food names for each meal
@@ -253,7 +292,7 @@ def list_meals():
             }
             for r in rows
         ]
-        return jsonify({"items": items})
+        return jsonify({"items": items, "hasMore": len(items) >= page_size if not date_param else False})
     finally:
         conn.close()
 
@@ -471,6 +510,26 @@ def report_month():
                 (openid, month),
             )
             rows = cur.fetchall()
+
+            # Fetch detailed meals for AI
+            cur.execute("""
+                SELECT id, occurred_at, total_calories FROM meals 
+                WHERE openid=%s AND DATE_FORMAT(FROM_UNIXTIME(occurred_at/1000), '%%Y-%%m')=%s
+                ORDER BY occurred_at ASC
+            """, (openid, month))
+            meals = cur.fetchall()
+            
+            meal_ids = [m["id"] for m in meals]
+            meal_items_map = {}
+            if meal_ids:
+                format_strings = ','.join(['%s'] * len(meal_ids))
+                cur.execute(f"SELECT meal_id, display_name FROM meal_items WHERE meal_id IN ({format_strings})", tuple(meal_ids))
+                items = cur.fetchall()
+                for it in items:
+                    mid = it["meal_id"]
+                    if mid not in meal_items_map: meal_items_map[mid] = []
+                    meal_items_map[mid].append(it["display_name"])
+
         days_logged = len(rows)
         total = sum(int(r.get("c") or 0) for r in rows)
         avg = int(round(total / days_logged)) if days_logged else 0
@@ -482,7 +541,26 @@ def report_month():
             advice.append("优先控制晚餐主食和油脂")
         if not advice:
             advice = ["继续保持记录习惯", "三餐规律，控制加餐"]
-        return jsonify({"summary": {"avgCalories": avg, "daysLogged": days_logged, "daysOverTarget": days_over}, "advice": {"bullets": advice}})
+
+        # AI Analysis
+        report_text = f"用户每日目标热量：{target} kcal\n本月饮食记录：\n"
+        for m in meals:
+            dt = datetime.fromtimestamp(m["occurred_at"]/1000, CN_TZ).strftime("%Y-%m-%d %H:%M")
+            foods = ",".join(meal_items_map.get(m["id"], []))
+            report_text += f"- {dt}: 此餐{m['total_calories']}kcal, 食物: {foods}\n"
+        
+        prompt = f"""
+        {report_text}
+        
+        请根据以上数据进行分析：
+        1. 统计达标天数（<= {target}）和超标天数。
+        2. 计算日均热量摄取。
+        3. 给出具体的饮食建议及注意事项。
+        请直接返回分析结果，使用Markdown格式。
+        """
+        ai_analysis = call_volcengine_ai(prompt)
+
+        return jsonify({"summary": {"avgCalories": avg, "daysLogged": days_logged, "daysOverTarget": days_over}, "advice": {"bullets": advice}, "aiAnalysis": ai_analysis})
     finally:
         conn.close()
 
