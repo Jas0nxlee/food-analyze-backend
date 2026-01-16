@@ -143,5 +143,16 @@ def init_schema():
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
                 """
             )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS monthly_reports (
+                  openid VARCHAR(64) NOT NULL,
+                  month VARCHAR(7) NOT NULL,
+                  content TEXT,
+                  created_at BIGINT NOT NULL,
+                  PRIMARY KEY (openid, month)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                """
+            )
     finally:
         conn.close()

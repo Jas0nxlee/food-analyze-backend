@@ -494,23 +494,36 @@ def report_month():
         return jsonify({"error": "db_unavailable", "message": DB_INIT_ERROR}), 503
     conn = connect()
     try:
+        # Try fetch cached analysis
+        with conn.cursor() as cur:
+            cur.execute("SELECT content FROM monthly_reports WHERE openid=%s AND month=%s", (openid, month))
+            cached = cur.fetchone()
+        
+        ai_analysis = cached["content"] if cached else ""
+        
+        return jsonify({
+            "aiAnalysis": ai_analysis,
+            "hasAnalysis": bool(ai_analysis)
+        })
+    finally:
+        conn.close()
+
+@app.route("/api/reports/month/analyze", methods=["POST"])
+def report_month_analyze():
+    openid = get_openid()
+    data = request.get_json(force=True) or {}
+    month = data.get("month") or datetime.now(timezone.utc).astimezone().strftime("%Y-%m")
+    
+    if not ensure_db_ready():
+        return jsonify({"error": "db_unavailable", "message": DB_INIT_ERROR}), 503
+        
+    conn = connect()
+    try:
         with conn.cursor() as cur:
             cur.execute("SELECT daily_target AS t FROM users WHERE openid=%s", (openid,))
             row = cur.fetchone()
             target = int(row["t"]) if row else 1800
-            cur.execute(
-                """
-                SELECT
-                  DATE_FORMAT(FROM_UNIXTIME(occurred_at/1000), '%%Y-%%m-%%d') AS d,
-                  SUM(total_calories) AS c
-                FROM meals
-                WHERE openid=%s AND DATE_FORMAT(FROM_UNIXTIME(occurred_at/1000), '%%Y-%%m')=%s
-                GROUP BY d
-                """,
-                (openid, month),
-            )
-            rows = cur.fetchall()
-
+            
             # Fetch detailed meals for AI
             cur.execute("""
                 SELECT id, occurred_at, total_calories FROM meals 
@@ -518,6 +531,9 @@ def report_month():
                 ORDER BY occurred_at ASC
             """, (openid, month))
             meals = cur.fetchall()
+            
+            if not meals:
+                return jsonify({"aiAnalysis": "本月暂无饮食记录，无法进行分析。", "hasAnalysis": True})
             
             meal_ids = [m["id"] for m in meals]
             meal_items_map = {}
@@ -529,18 +545,6 @@ def report_month():
                     mid = it["meal_id"]
                     if mid not in meal_items_map: meal_items_map[mid] = []
                     meal_items_map[mid].append(it["display_name"])
-
-        days_logged = len(rows)
-        total = sum(int(r.get("c") or 0) for r in rows)
-        avg = int(round(total / days_logged)) if days_logged else 0
-        days_over = sum(1 for r in rows if int(r.get("c") or 0) > target)
-        advice = []
-        if days_over >= 10:
-            advice.append("减少油炸和含糖饮料摄入")
-        if avg > target:
-            advice.append("优先控制晚餐主食和油脂")
-        if not advice:
-            advice = ["继续保持记录习惯", "三餐规律，控制加餐"]
 
         # AI Analysis
         report_text = f"用户每日目标热量：{target} kcal\n本月饮食记录：\n"
@@ -559,8 +563,20 @@ def report_month():
         请直接返回分析结果，使用Markdown格式。
         """
         ai_analysis = call_volcengine_ai(prompt)
-
-        return jsonify({"summary": {"avgCalories": avg, "daysLogged": days_logged, "daysOverTarget": days_over}, "advice": {"bullets": advice}, "aiAnalysis": ai_analysis})
+        
+        # Save to cache
+        ts = now_ts()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO monthly_reports (openid, month, content, created_at)
+                VALUES (%s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE content=%s, created_at=%s
+                """,
+                (openid, month, ai_analysis, ts, ai_analysis, ts)
+            )
+            
+        return jsonify({"aiAnalysis": ai_analysis, "hasAnalysis": True})
     finally:
         conn.close()
 
