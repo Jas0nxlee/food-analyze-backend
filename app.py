@@ -4,6 +4,7 @@ import json
 import base64
 import urllib.parse
 import urllib.request
+import requests
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify
 
@@ -189,8 +190,8 @@ def map_food_items_by_name(conn, names):
     return out
 
 def call_volcengine_ai(prompt: str):
-    api_key = os.environ.get("VOLC_API_KEY")
-    model = os.environ.get("VOLC_MODEL")
+    api_key = os.environ.get("VOLC_API_KEY", "").strip()
+    model = os.environ.get("VOLC_MODEL", "").strip()
     if not api_key or not model:
         return "AI未配置（请检查VOLC_API_KEY和VOLC_MODEL环境变量）"
     
@@ -209,10 +210,12 @@ def call_volcengine_ai(prompt: str):
     }
     
     try:
-        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            return data.get("choices", [{}])[0].get("message", {}).get("content", "AI分析无返回")
+        resp = requests.post(url, json=payload, headers=headers, timeout=60)
+        if resp.status_code != 200:
+            return f"AI调用失败: HTTP {resp.status_code} - {resp.text}"
+            
+        data = resp.json()
+        return data.get("choices", [{}])[0].get("message", {}).get("content", "AI分析无返回")
     except Exception as e:
         return f"AI调用失败: {str(e)}"
 
