@@ -1,4 +1,5 @@
 import os
+import io
 import time
 import json
 import base64
@@ -8,6 +9,7 @@ import requests
 import threading
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify
+from PIL import Image
 
 from db import connect, init_schema
 

@@ -1,5 +1,6 @@
 import os
 import pymysql
+from dbutils.pooled_db import PooledDB
 
 
 def _parse_host_port(value: str):
@@ -45,19 +46,37 @@ def get_db_config():
     }
 
 
+# 全局连接池实例
+_pool = None
+
+
+def get_pool():
+    """获取数据库连接池（懒加载单例）"""
+    global _pool
+    if _pool is None:
+        cfg = get_db_config()
+        _pool = PooledDB(
+            creator=pymysql,
+            maxconnections=10,  # 最大连接数
+            mincached=2,        # 初始化时创建的空闲连接数
+            maxcached=5,        # 最大空闲连接数
+            blocking=True,      # 连接池耗尽时阻塞等待
+            host=cfg["host"],
+            port=cfg["port"],
+            user=cfg["user"],
+            password=cfg["password"],
+            database=cfg["database"],
+            charset=cfg["charset"],
+            cursorclass=pymysql.cursors.DictCursor,
+            autocommit=True,
+            connect_timeout=5,
+        )
+    return _pool
+
+
 def connect():
-    cfg = get_db_config()
-    return pymysql.connect(
-        host=cfg["host"],
-        port=cfg["port"],
-        user=cfg["user"],
-        password=cfg["password"],
-        database=cfg["database"],
-        charset=cfg["charset"],
-        cursorclass=pymysql.cursors.DictCursor,
-        autocommit=True,
-        connect_timeout=5,
-    )
+    """从连接池获取一个数据库连接"""
+    return get_pool().connection()
 
 
 def init_schema():
