@@ -549,6 +549,19 @@ def create_manual_meal():
     try:
         ensure_seed_food_items(conn)
         with conn.cursor() as cur:
+            # 幂等性检查：5秒内是否有相同食物名称的记录
+            cur.execute(
+                """
+                SELECT m.id FROM meals m 
+                JOIN meal_items mi ON m.id = mi.meal_id 
+                WHERE m.openid=%s AND mi.display_name=%s AND m.created_at > %s
+                """,
+                (openid, name, created_at - 5000)
+            )
+            existing = cur.fetchone()
+            if existing:
+                return jsonify({"error": "duplicate", "message": "请勿重复提交", "_id": existing["id"]}), 409
+            
             # Insert meal
             cur.execute(
                 "INSERT INTO meals (id, openid, occurred_at, image_file_id, recognize_id, taste_level, total_calories, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
