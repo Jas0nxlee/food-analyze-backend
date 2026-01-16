@@ -190,7 +190,7 @@ def map_food_items_by_name(conn, names):
         out[r["name"]] = {"foodItemId": r["id"], "calorieHint": int(r.get("calories_per_100g") or 0)}
     return out
 
-def call_volcengine_ai(prompt: str):
+def call_volcengine_ai(prompt: str, system_prompt=None):
     api_key = os.environ.get("VOLC_API_KEY", "").strip()
     model = os.environ.get("VOLC_MODEL", "").strip()
     if not api_key or not model:
@@ -201,10 +201,11 @@ def call_volcengine_ai(prompt: str):
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}"
     }
+    sys = system_prompt or "你是专业的营养师。请根据用户的月度饮食记录进行分析。"
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": "你是专业的营养师。请根据用户的月度饮食记录进行分析。"},
+            {"role": "system", "content": sys},
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.7
