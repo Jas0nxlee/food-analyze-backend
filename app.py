@@ -192,9 +192,16 @@ def map_food_items_by_name(conn, names):
         out[r["name"]] = {"foodItemId": r["id"], "calorieHint": int(r.get("calories_per_100g") or 0)}
     return out
 
-def call_volcengine_ai(prompt: str, system_prompt=None):
+def call_volcengine_ai(prompt: str, system_prompt=None, model_override=None):
+    """调用火山引擎 AI
+    
+    Args:
+        prompt: 用户提示词
+        system_prompt: 系统提示词
+        model_override: 可选，指定使用的模型（覆盖默认 VOLC_MODEL）
+    """
     api_key = os.environ.get("VOLC_API_KEY", "").strip()
-    model = os.environ.get("VOLC_MODEL", "").strip()
+    model = model_override or os.environ.get("VOLC_MODEL", "").strip()
     if not api_key or not model:
         return "AI未配置（请检查VOLC_API_KEY和VOLC_MODEL环境变量）"
     
@@ -549,14 +556,14 @@ def create_manual_meal():
     try:
         ensure_seed_food_items(conn)
         with conn.cursor() as cur:
-            # 幂等性检查：5秒内是否有相同食物名称的记录
+            # 幂等性检查：30秒内是否有相同食物名称的记录
             cur.execute(
                 """
                 SELECT m.id FROM meals m 
                 JOIN meal_items mi ON m.id = mi.meal_id 
                 WHERE m.openid=%s AND mi.display_name=%s AND m.created_at > %s
                 """,
-                (openid, name, created_at - 5000)
+                (openid, name, created_at - 30000)
             )
             existing = cur.fetchone()
             if existing:
@@ -606,7 +613,9 @@ def report_month():
 def run_async_analysis(openid, month, prompt):
     try:
         print(f"Async analysis started for {openid} - {month}")
-        ai_analysis = call_volcengine_ai(prompt)
+        # 月报分析使用 VOLC_MODEL2 模型
+        model2 = os.environ.get("VOLC_MODEL2", "").strip()
+        ai_analysis = call_volcengine_ai(prompt, model_override=model2 if model2 else None)
         
         # Save to cache
         ts = now_ts()
