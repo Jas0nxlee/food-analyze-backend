@@ -210,13 +210,21 @@ def call_volcengine_ai(prompt: str):
     }
     
     try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=60)
+        print(f"Calling AI... Model: {model}, URL: {url}")
+        # Increase timeout to 120s to accommodate slow generation
+        resp = requests.post(url, json=payload, headers=headers, timeout=120)
+        
         if resp.status_code != 200:
+            print(f"AI Error: {resp.status_code} - {resp.text}")
             return f"AI调用失败: HTTP {resp.status_code} - {resp.text}"
             
         data = resp.json()
         return data.get("choices", [{}])[0].get("message", {}).get("content", "AI分析无返回")
+    except requests.exceptions.Timeout:
+        print("AI Timeout")
+        return "AI调用超时（超过120秒），请稍后再试或检查网络。"
     except Exception as e:
+        print(f"AI Exception: {e}")
         return f"AI调用失败: {str(e)}"
 
 @app.route("/api/health", methods=["GET"])
