@@ -498,6 +498,73 @@ def create_meal():
     finally:
         conn.close()
 
+@app.route("/api/meals/manual", methods=["POST"])
+def create_manual_meal():
+    openid = get_openid()
+    data = request.get_json(force=True) or {}
+    
+    name = (data.get("name") or "").strip()
+    portion_level = data.get("portionLevel") or "medium"
+    occurred_at = int(data.get("occurredAt") or now_ts())
+    
+    if not name:
+        return jsonify({"error": "bad_request", "message": "name is required"}), 400
+        
+    if not ensure_db_ready():
+        return jsonify({"error": "db_unavailable", "message": DB_INIT_ERROR}), 503
+
+    # 1. Call AI to estimate calories
+    portion_desc = "中份"
+    if portion_level == "small": portion_desc = "小份"
+    if portion_level == "large": portion_desc = "大份"
+    
+    prompt = f"食物：{name}，分量：{portion_desc}。请估算热量（整数，单位kcal）。请务必只返回一个JSON对象，格式为：{{\"calories\": 100, \"reason\": \"估算依据\"}}。不要包含Markdown格式或其他文字。"
+    system_prompt = "你是专业的营养师，负责估算食物热量。只输出JSON。"
+    
+    ai_resp = call_volcengine_ai(prompt, system_prompt=system_prompt)
+    print(f"Manual AI Resp: {ai_resp}")
+    
+    # Parse JSON
+    calories = 0
+    try:
+        # Strip code blocks if present
+        clean_resp = ai_resp.replace("```json", "").replace("```", "").strip()
+        parsed = json.loads(clean_resp)
+        calories = int(parsed.get("calories") or 0)
+    except Exception as e:
+        print(f"Failed to parse AI response: {e}")
+        # Fallback estimation if AI fails or returns garbage
+        if portion_level == "small": calories = 100
+        elif portion_level == "large": calories = 300
+        else: calories = 200
+
+    # 2. Save to DB
+    meal_id = f"m_manual_{now_ts()}"
+    created_at = now_ts()
+    
+    conn = connect()
+    try:
+        ensure_seed_food_items(conn)
+        with conn.cursor() as cur:
+            # Insert meal
+            cur.execute(
+                "INSERT INTO meals (id, openid, occurred_at, image_file_id, recognize_id, taste_level, total_calories, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                (meal_id, openid, occurred_at, "", "", "normal", calories, created_at),
+            )
+            
+            # Insert meal item
+            item_id = f"mi_{meal_id}_{now_ts()}"
+            # Use a dummy food_item_id or check if name exists in food_items?
+            # For simplicity, we just use the name directly.
+            cur.execute(
+                "INSERT INTO meal_items (id, meal_id, openid, food_item_id, display_name, portion_level, calories, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                (item_id, meal_id, openid, "", name, portion_level, calories, created_at),
+            )
+            
+        return jsonify({"_id": meal_id, "ok": True, "calories": calories, "aiRaw": ai_resp})
+    finally:
+        conn.close()
+
 @app.route("/api/reports/month", methods=["GET"])
 def report_month():
     openid = get_openid()
